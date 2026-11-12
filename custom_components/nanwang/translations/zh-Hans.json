@@ -1,0 +1,130 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "南网在线",
+        "description": "选择登录方式。只调用查询接口，不缴费、不绑定、不改资料。",
+        "menu_options": {
+          "sms": "手机号 + 短信验证码",
+          "token": "导入浏览器 token"
+        }
+      },
+      "reauth_confirm": {
+        "title": "登录已失效",
+        "description": "南网在线的登录 token 已失效，请重新登录。",
+        "menu_options": {
+          "sms": "手机号 + 短信验证码",
+          "token": "导入浏览器 token"
+        }
+      },
+      "sms": {
+        "title": "短信登录",
+        "description": "提交后会向该手机号发送一条登录验证码。",
+        "data": {
+          "phone": "手机号",
+          "area_code": "所在地区"
+        }
+      },
+      "sms_code": {
+        "title": "输入验证码",
+        "description": "验证码已发送到 {phone}。",
+        "data": {
+          "code": "短信验证码"
+        }
+      },
+      "token": {
+        "title": "导入 token",
+        "description": "在浏览器登录 {url} 后，打开开发者工具 → Application → Session Storage，复制 `token`（可选再复制 `custnumber`）。",
+        "data": {
+          "token": "x-auth-token",
+          "custnumber": "custNumber（可选）",
+          "area_code": "所在地区"
+        }
+      }
+    },
+    "error": {
+      "invalid_phone": "手机号格式不正确",
+      "sms_failed": "发送验证码失败：{message}",
+      "login_failed": "登录失败：{message}",
+      "invalid_auth": "token 无效或已过期",
+      "api_error": "接口返回错误：{message}",
+      "cannot_connect": "无法连接南网在线",
+      "unknown": "未知错误，请查看日志"
+    },
+    "abort": {
+      "already_configured": "该账号已经添加过了",
+      "no_accounts": "该账号没有绑定任何户号",
+      "reauth_successful": "重新登录成功"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "balance": {
+        "name": "电费余额"
+      },
+      "arrears": {
+        "name": "欠费金额"
+      },
+      "locked_balance": {
+        "name": "锁定余额"
+      },
+      "year_energy": {
+        "name": "今年电量"
+      },
+      "year_cost": {
+        "name": "今年电费"
+      },
+      "last_bill_energy": {
+        "name": "最近账单月电量",
+        "state_attributes": {
+          "year_month": {
+            "name": "账单月份"
+          }
+        }
+      },
+      "last_bill_cost": {
+        "name": "最近账单月电费",
+        "state_attributes": {
+          "year_month": {
+            "name": "账单月份"
+          }
+        }
+      },
+      "unit_price": {
+        "name": "最近账单月均价",
+        "state_attributes": {
+          "year_month": {
+            "name": "账单月份"
+          }
+        }
+      },
+      "month_energy": {
+        "name": "本月电量",
+        "state_attributes": {
+          "month": {
+            "name": "月份"
+          }
+        }
+      },
+      "month_cost_estimated": {
+        "name": "本月预估电费",
+        "state_attributes": {
+          "unit_price": {
+            "name": "参考均价（元/kWh）"
+          },
+          "price_from": {
+            "name": "均价取自"
+          }
+        }
+      },
+      "latest_day_energy": {
+        "name": "最近一日电量",
+        "state_attributes": {
+          "date": {
+            "name": "数据日期"
+          }
+        }
+      }
+    }
+  }
+}

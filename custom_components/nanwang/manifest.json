@@ -1,0 +1,17 @@
+{
+  "domain": "nanwang",
+  "name": "南网在线",
+  "after_dependencies": [
+    "recorder"
+  ],
+  "codeowners": [
+    "@ywandy"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/ywandy/nanwang_hass",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/ywandy/nanwang_hass/issues",
+  "requirements": [],
+  "version": "0.2.0"
+}

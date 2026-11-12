@@ -1,0 +1,130 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "China Southern Power Grid",
+        "description": "Choose how to sign in. Only read-only query APIs are used.",
+        "menu_options": {
+          "sms": "Phone number + SMS code",
+          "token": "Import browser token"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Session expired",
+        "description": "The 95598.csg.cn token has expired. Please sign in again.",
+        "menu_options": {
+          "sms": "Phone number + SMS code",
+          "token": "Import browser token"
+        }
+      },
+      "sms": {
+        "title": "SMS sign-in",
+        "description": "A verification code will be sent to this phone number.",
+        "data": {
+          "phone": "Phone number",
+          "area_code": "Region"
+        }
+      },
+      "sms_code": {
+        "title": "Verification code",
+        "description": "The code was sent to {phone}.",
+        "data": {
+          "code": "SMS code"
+        }
+      },
+      "token": {
+        "title": "Import token",
+        "description": "Sign in at {url} in a browser, then open DevTools → Application → Session Storage and copy `token` (and optionally `custnumber`).",
+        "data": {
+          "token": "x-auth-token",
+          "custnumber": "custNumber (optional)",
+          "area_code": "Region"
+        }
+      }
+    },
+    "error": {
+      "invalid_phone": "Invalid phone number",
+      "sms_failed": "Failed to send the code: {message}",
+      "login_failed": "Sign-in failed: {message}",
+      "invalid_auth": "Token is invalid or expired",
+      "api_error": "API error: {message}",
+      "cannot_connect": "Failed to connect",
+      "unknown": "Unexpected error, check the logs"
+    },
+    "abort": {
+      "already_configured": "Account is already configured",
+      "no_accounts": "No electricity accounts are bound to this login",
+      "reauth_successful": "Re-authentication was successful"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "balance": {
+        "name": "Balance"
+      },
+      "arrears": {
+        "name": "Arrears"
+      },
+      "locked_balance": {
+        "name": "Locked balance"
+      },
+      "year_energy": {
+        "name": "Energy this year"
+      },
+      "year_cost": {
+        "name": "Cost this year"
+      },
+      "last_bill_energy": {
+        "name": "Latest billed month energy",
+        "state_attributes": {
+          "year_month": {
+            "name": "Billing month"
+          }
+        }
+      },
+      "last_bill_cost": {
+        "name": "Latest billed month cost",
+        "state_attributes": {
+          "year_month": {
+            "name": "Billing month"
+          }
+        }
+      },
+      "unit_price": {
+        "name": "Latest billed month unit price",
+        "state_attributes": {
+          "year_month": {
+            "name": "Billing month"
+          }
+        }
+      },
+      "month_energy": {
+        "name": "Energy this month",
+        "state_attributes": {
+          "month": {
+            "name": "Month"
+          }
+        }
+      },
+      "month_cost_estimated": {
+        "name": "Estimated cost this month",
+        "state_attributes": {
+          "unit_price": {
+            "name": "Reference unit price (CNY/kWh)"
+          },
+          "price_from": {
+            "name": "Unit price from"
+          }
+        }
+      },
+      "latest_day_energy": {
+        "name": "Latest day energy",
+        "state_attributes": {
+          "date": {
+            "name": "Data date"
+          }
+        }
+      }
+    }
+  }
+}
