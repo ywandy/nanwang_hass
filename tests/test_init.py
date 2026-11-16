@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -19,6 +20,7 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
+from custom_components.nanwang import async_get_session
 from custom_components.nanwang.api import NanwangApiError, NanwangAuthError
 from custom_components.nanwang.const import DOMAIN
 from custom_components.nanwang.diagnostics import async_get_config_entry_diagnostics
@@ -42,6 +44,28 @@ def _state(hass: HomeAssistant, key: str):
     entity_id = er.async_get(hass).async_get_entity_id("sensor", DOMAIN, f"{NUMBER}_{key}")
     assert entity_id, key
     return hass.states.get(entity_id)
+
+
+async def test_shared_session_survives_entry_unload(
+    hass: HomeAssistant, mock_api: dict[str, AsyncMock]
+) -> None:
+    """卸载创建会话的配置不能让其他账号和登录流程失去连接。"""
+    entry = _entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    session = async_get_session(hass)
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert not session.closed
+    assert async_get_session(hass) is session
+
+
+async def test_closed_session_is_replaced(hass: HomeAssistant) -> None:
+    session = async_get_session(hass)
+    session.detach()
+
+    replacement = async_get_session(hass)
+    assert not replacement.closed
+    assert async_get_session(hass) is replacement
 
 
 @pytest.fixture
@@ -117,27 +141,38 @@ async def test_recent_days_cross_month(
     assert _state(hass, "latest_day_energy").attributes["date"] == "2026-11-02"
 
 
-async def test_fixed_refresh_schedule(
-    hass: HomeAssistant, freezer: FrozenDateTimeFactory, mock_api: dict[str, AsyncMock]
+@pytest.mark.parametrize(("options", "hours"), [({}, 4), ({"update_interval_hours": 6}, 6)])
+async def test_refresh_interval(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_api: dict[str, AsyncMock],
+    options: dict[str, int],
+    hours: int,
 ) -> None:
-    """只在每天 0 点、12 点刷新。"""
+    """启动后按默认或自定义间隔重复刷新，卸载后停止。"""
     await hass.config.async_set_time_zone("Asia/Shanghai")
     freezer.move_to("2026-11-12 10:00:00+08:00")
     entry = _entry(hass)
+    hass.config_entries.async_update_entry(entry, options=options)
     assert await hass.config_entries.async_setup(entry.entry_id)
     calls = mock_api["async_get_bound_users"]
     assert calls.await_count == 1
 
-    for moment, expected in (
-        ("2026-11-12 11:59:59+08:00", 1),
-        ("2026-11-12 12:00:00+08:00", 2),
-        ("2026-11-12 18:00:00+08:00", 2),
-        ("2026-11-13 00:00:00+08:00", 3),
+    for elapsed, expected in (
+        (timedelta(hours=hours, seconds=-1), 1),
+        (timedelta(seconds=2), 2),
+        (timedelta(hours=hours, seconds=1), 3),
     ):
-        freezer.move_to(moment)
+        freezer.tick(elapsed)
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
-        assert calls.await_count == expected, moment
+        assert calls.await_count == expected
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    freezer.tick(timedelta(hours=hours, seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert calls.await_count == 3
 
 
 @pytest.mark.usefixtures("shanghai")
@@ -162,9 +197,12 @@ async def test_account_without_data(
 async def test_token_refresh_persisted(hass: HomeAssistant, mock_api: dict[str, AsyncMock]) -> None:
     entry = _entry(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
-    client = entry.runtime_data.client
+    coordinator = entry.runtime_data
+    client = coordinator.client
     client.token = "tok-new"
     client.on_auth_update()
+    await hass.async_block_till_done()
+    assert entry.runtime_data is coordinator  # token 续期不能触发配置重载
     assert entry.data["token"] == "tok-new"
     assert entry.data["phone"] == "13800001234"
     assert entry.state is ConfigEntryState.LOADED

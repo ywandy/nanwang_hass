@@ -31,8 +31,9 @@ DEFAULT_AREA_CODE = "030000"
 # queryBindEleUsers.eleType，只收录真实账号确认过的
 ELE_TYPES: dict[str, str] = {"100": "充电桩", "500": "居民"}
 
-# 固定在每天这几个整点刷新（当地时间）
-REFRESH_HOURS = (0, 12)
+# 每个账号可在集成选项中配置刷新间隔（小时）
+CONF_UPDATE_INTERVAL_HOURS = "update_interval_hours"
+DEFAULT_UPDATE_INTERVAL_HOURS = 4
 
 # 每次刷新都重新同步最近这么多天的逐日数据（跨月会连上个月一起取）
 RECENT_DAYS = 15

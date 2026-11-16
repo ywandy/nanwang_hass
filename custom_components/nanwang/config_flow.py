@@ -9,10 +9,16 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
+    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    OptionsFlow,
 )
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -34,7 +40,9 @@ from .const import (
     CONF_CUSTNUMBER,
     CONF_PHONE,
     CONF_TOKEN,
+    CONF_UPDATE_INTERVAL_HOURS,
     DEFAULT_AREA_CODE,
+    DEFAULT_UPDATE_INTERVAL_HOURS,
     DOMAIN,
 )
 
@@ -71,6 +79,11 @@ def mask_phone(phone: str) -> str:
 
 class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> NanwangOptionsFlow:
+        return NanwangOptionsFlow()
 
     def __init__(self) -> None:
         self._client: NanwangClient | None = None
@@ -219,4 +232,39 @@ class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured(updates=data)
         title = f"南网 {mask_phone(self._phone)}" if self._phone else f"南网 {numbers[0]}"
         return self.async_create_entry(title=title, data=data)
+
+
+class NanwangOptionsFlow(OptionsFlow):
+    """按账号配置刷新间隔。"""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            hours = user_input[CONF_UPDATE_INTERVAL_HOURS]
+            if hours != int(hours):
+                errors[CONF_UPDATE_INTERVAL_HOURS] = "invalid_interval"
+            else:
+                return self.async_create_entry(
+                    title="",
+                    data={**self.config_entry.options, CONF_UPDATE_INTERVAL_HOURS: int(hours)},
+                )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_UPDATE_INTERVAL_HOURS,
+                        default=self.config_entry.options.get(
+                            CONF_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1, max=24, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="h"
+                        )
+                    )
+                }
+            ),
+            errors=errors,
+        )
 

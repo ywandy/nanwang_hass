@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -15,7 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import STA_NO_DATA, NanwangApiError, NanwangAuthError, NanwangClient, NanwangError
-from .const import DOMAIN
+from .const import CONF_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
 from .statistics import (
     async_import_daily_energy,
     async_last_statistic,
@@ -107,7 +107,7 @@ class AccountData:
 class NanwangCoordinator(DataUpdateCoordinator[dict[str, AccountData]]):
     """以 eleCustNumber 为 key 汇总所有户号。
 
-    不自己轮询（update_interval=None），由 __init__ 在每天 REFRESH_HOURS 整点触发刷新。
+    启动时读取一次，之后按账号选项中的小时数轮询（默认 4 小时）。
     """
 
     config_entry: NanwangConfigEntry
@@ -115,7 +115,10 @@ class NanwangCoordinator(DataUpdateCoordinator[dict[str, AccountData]]):
     def __init__(
         self, hass: HomeAssistant, entry: NanwangConfigEntry, client: NanwangClient
     ) -> None:
-        super().__init__(hass, _LOGGER, config_entry=entry, name=DOMAIN, update_interval=None)
+        hours = entry.options.get(CONF_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS)
+        super().__init__(
+            hass, _LOGGER, config_entry=entry, name=DOMAIN, update_interval=timedelta(hours=hours)
+        )
         self.client = client
         self._points: dict[str, dict[str, Any] | None] = {}
         client.on_auth_update = self._persist_auth

@@ -57,6 +57,20 @@
       "reauth_successful": "重新登录成功"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "数据刷新设置",
+        "description": "默认每 4 小时获取一次数据，可设置为 1～24 小时的整数。保存后立即刷新一次，之后按新间隔自动刷新。",
+        "data": {
+          "update_interval_hours": "刷新间隔（小时）"
+        }
+      }
+    },
+    "error": {
+      "invalid_interval": "请输入 1～24 之间的整数"
+    }
+  },
   "entity": {
     "sensor": {
       "balance": {

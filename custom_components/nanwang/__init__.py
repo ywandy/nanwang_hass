@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import aiohttp
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_CLOSE, Platform
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
-from homeassistant.helpers.event import async_track_time_change
 
 from .api import NanwangClient
-from .const import CONF_COOKIES, CONF_CUSTNUMBER, CONF_TOKEN, DOMAIN, REFRESH_HOURS
+from .const import CONF_COOKIES, CONF_CUSTNUMBER, CONF_TOKEN, DOMAIN
 from .coordinator import NanwangConfigEntry, NanwangCoordinator
 
 PLATFORMS = [Platform.SENSOR]
@@ -25,10 +22,16 @@ def async_get_session(hass: HomeAssistant) -> aiohttp.ClientSession:
     cookie 由 NanwangClient 按账号手动管理，避免共享 cookie jar 让多个账号串会话。
     """
     session = hass.data.get(_DATA_SESSION)
-    if session is None:
+    if session is None or session.closed:
         session = hass.data[_DATA_SESSION] = async_create_clientsession(
-            hass, cookie_jar=aiohttp.DummyCookieJar()
+            hass, auto_cleanup=False, cookie_jar=aiohttp.DummyCookieJar()
         )
+        # 全局共享会话不能跟随创建它的 config entry 卸载，否则其他账号和配置流程会失效。
+        @callback
+        def _async_close_session(_event: Event) -> None:
+            session.detach()
+
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_CLOSE, _async_close_session)
     return session
 
 
@@ -43,15 +46,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: NanwangConfigEntry) -> b
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
 
-    async def _scheduled_refresh(now: datetime) -> None:
-        await coordinator.async_refresh()
+    options = dict(entry.options)
 
-    # 启动时拉一次，之后只在每天固定整点刷新
-    entry.async_on_unload(
-        async_track_time_change(
-            hass, _scheduled_refresh, hour=list(REFRESH_HOURS), minute=0, second=0
-        )
-    )
+    async def _async_update_options(hass: HomeAssistant, updated_entry: NanwangConfigEntry) -> None:
+        # token 续期也会更新 entry，只在用户修改选项时重新加载。
+        if updated_entry.options != options:
+            await hass.config_entries.async_reload(updated_entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(_async_update_options))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

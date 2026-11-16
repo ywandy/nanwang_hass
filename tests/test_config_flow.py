@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
+import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.nanwang.api import NanwangApiError, NanwangAuthError
 from custom_components.nanwang.const import DOMAIN
@@ -110,4 +113,62 @@ async def test_reauth(hass: HomeAssistant, mock_api: dict[str, AsyncMock]) -> No
     await hass.async_block_till_done()  # 等后台 reload 结束
     assert entry.data["token"] == "new"
     assert entry.data["phone"] == "13800001234"
+
+
+@pytest.mark.parametrize(("options", "current_hours"), [({}, 4), ({"update_interval_hours": 12}, 12)])
+async def test_refresh_options_apply_without_restart(
+    hass: HomeAssistant,
+    mock_api: dict[str, AsyncMock],
+    freezer: FrozenDateTimeFactory,
+    options: dict[str, int],
+    current_hours: int,
+) -> None:
+    freezer.move_to("2026-11-16 00:00:00+00:00")
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="CUST1", data={"token": "tok"}, options=options
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["data_schema"]({})["update_interval_hours"] == current_hours
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"update_interval_hours": 6}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert entry.options == {"update_interval_hours": 6}
+    assert entry.data == {"token": "tok"}
+    assert entry.runtime_data.update_interval == timedelta(hours=6)
+
+    calls = mock_api["async_get_bound_users"]
+    assert calls.await_count == 2  # 初次加载和配置保存后各读取一次
+    freezer.tick(timedelta(hours=4, seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert calls.await_count == 2
+    freezer.tick(timedelta(hours=2))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert calls.await_count == 3
+
+
+@pytest.mark.parametrize("hours", [0, 25, 1.5])
+async def test_refresh_options_reject_invalid_interval(hass: HomeAssistant, hours: float) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, data={"token": "tok"})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    if hours in (0, 25):
+        with pytest.raises(InvalidData):
+            await hass.config_entries.options.async_configure(
+                result["flow_id"], {"update_interval_hours": hours}
+            )
+    else:
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"update_interval_hours": hours}
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {"update_interval_hours": "invalid_interval"}
+    assert entry.options == {}
 

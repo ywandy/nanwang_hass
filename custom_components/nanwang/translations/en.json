@@ -57,6 +57,20 @@
       "reauth_successful": "Re-authentication was successful"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Data refresh settings",
+        "description": "Data refreshes every 4 hours by default. Choose a whole number from 1 to 24 hours. Saving refreshes data immediately, then uses the new interval.",
+        "data": {
+          "update_interval_hours": "Refresh interval (hours)"
+        }
+      }
+    },
+    "error": {
+      "invalid_interval": "Enter a whole number from 1 to 24"
+    }
+  },
   "entity": {
     "sensor": {
       "balance": {
