@@ -1,5 +1,7 @@
 # 南网在线 · Home Assistant 集成
 
+<img src="custom_components/nanwang/brand/icon.png" alt="南方电网官方应用图标" width="96" height="96">
+
 把南方电网「南网在线」（[95598.csg.cn](https://95598.csg.cn/)）的余额、电量、电费接入 Home Assistant，逐日用电量还能直接用在**能量面板**里。
 
 - 只做查询：不缴费、不绑定、不改资料。
@@ -16,6 +18,10 @@
 ## 要求
 
 - Home Assistant **2025.6** 或更新
+
+图标提取自南网在线官方 Android 应用 5.0.9 的启动图标（`res/drawable-xxxhdpi-v4/ic_app_launcher.png`），保留原有图案、配色和背景，仅缩放为 256 和 512 像素。图标及商标归南方电网所有，本项目为非官方集成。
+
+Home Assistant **2026.3** 起支持插件自带的 `brand/` 图标，安装后会自动显示。旧版本的集成页面依赖在线品牌图库，无法直接显示插件内的图标；详见 [Home Assistant 官方说明](https://contributors.home-assistant.io/blog/2026/02/24/brands-proxy-api/)。
 
 ## 安装
 
