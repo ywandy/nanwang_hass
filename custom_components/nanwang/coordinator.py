@@ -15,7 +15,13 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import STA_NO_DATA, NanwangApiError, NanwangAuthError, NanwangClient, NanwangError
-from .const import CONF_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
+from .const import (
+    CONF_PASSWORD,
+    CONF_PHONE,
+    CONF_UPDATE_INTERVAL_HOURS,
+    DEFAULT_UPDATE_INTERVAL_HOURS,
+    DOMAIN,
+)
 from .statistics import (
     async_import_daily_energy,
     async_last_statistic,
@@ -90,7 +96,10 @@ class AccountData:
     def unit_price(self) -> float | None:
         """最近账单月均价（元/kWh）= 官方电费 ÷ 官方电量。"""
         bill = self.last_bill or {}
-        kwh, amount = to_float(bill.get("billingElectricity")), to_float(bill.get("actualTotalAmount"))
+        kwh, amount = (
+            to_float(bill.get("billingElectricity")),
+            to_float(bill.get("actualTotalAmount")),
+        )
         if not kwh or amount is None:
             return None
         return amount / kwh
@@ -126,9 +135,29 @@ class NanwangCoordinator(DataUpdateCoordinator[dict[str, AccountData]]):
         try:
             return await self._fetch_all()
         except NanwangAuthError as err:
+            # 存了密码就走掌厅通道静默重登（无人值守续期），成功后立刻重试一次。
+            if await self._async_try_password_relogin():
+                try:
+                    return await self._fetch_all()
+                except NanwangAuthError as retry_err:
+                    raise ConfigEntryAuthFailed(str(retry_err)) from retry_err
             raise ConfigEntryAuthFailed(str(err)) from err
         except NanwangError as err:
             raise UpdateFailed(str(err)) from err
+
+    async def _async_try_password_relogin(self) -> bool:
+        """token 失效时用保存的密码自动重登；没存密码或重登失败则交还交互式流程。"""
+        data = self.config_entry.data
+        phone, password = data.get(CONF_PHONE), data.get(CONF_PASSWORD)
+        if not phone or not password:
+            return False
+        try:
+            await self.client.async_login_password(phone, password)
+        except NanwangError as err:
+            _LOGGER.warning("密码自动重登失败，需要重新登录：%s", err)
+            return False
+        _LOGGER.info("密码自动重登成功，token 已续期")
+        return True
 
     async def _optional[T](self, aw: Awaitable[T], what: str) -> T | None:
         """单个子查询的业务失败只记日志，不拖垮整次刷新；登录失效和网络错误照常抛出。"""

@@ -11,10 +11,12 @@ CONF_TOKEN = "token"
 CONF_CUSTNUMBER = "custnumber"
 CONF_COOKIES = "cookies"
 CONF_AREA_CODE = "area_code"
+CONF_PASSWORD = "password"
 CONF_AUTH_METHOD = "auth_method"
 
 AUTH_SMS = "sms"
 AUTH_TOKEN = "token"
+AUTH_PASSWORD = "password"
 
 # 登录/电费查询用的地区编码（App 登录 defaultAreaCode）
 AREA_CODES: dict[str, str] = {

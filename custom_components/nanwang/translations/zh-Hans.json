@@ -6,7 +6,8 @@
         "description": "选择登录方式。只调用查询接口，不缴费、不绑定、不改资料。",
         "menu_options": {
           "sms": "手机号 + 短信验证码",
-          "token": "导入 App token"
+          "token": "导入 App token",
+          "password": "手机号 + 密码（可自动续期）"
         }
       },
       "reauth_confirm": {
@@ -14,7 +15,8 @@
         "description": "南网在线的登录 token 已失效，请重新登录。",
         "menu_options": {
           "sms": "手机号 + 短信验证码",
-          "token": "导入 App token"
+          "token": "导入 App token",
+          "password": "手机号 + 密码（可自动续期）"
         }
       },
       "sms": {
@@ -38,6 +40,15 @@
         "data": {
           "token": "x-auth-token",
           "custnumber": "custNumber（可选）",
+          "area_code": "所在地区"
+        }
+      },
+      "password": {
+        "title": "密码登录",
+        "description": "使用南网在线 App 的账号密码登录。登录成功后集成会在 token 失效时自动重登，无需再收短信。（未设置过密码的用户请先在 App 内设置）",
+        "data": {
+          "phone": "手机号",
+          "password": "密码",
           "area_code": "所在地区"
         }
       }

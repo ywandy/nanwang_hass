@@ -6,7 +6,8 @@
         "description": "Choose how to sign in. Only read-only query APIs are used.",
         "menu_options": {
           "sms": "Phone number + SMS code",
-          "token": "Import App token"
+          "token": "Import App token",
+          "password": "Phone + password (auto-renew)"
         }
       },
       "reauth_confirm": {
@@ -14,7 +15,8 @@
         "description": "The 95598.csg.cn token has expired. Please sign in again.",
         "menu_options": {
           "sms": "Phone number + SMS code",
-          "token": "Import App token"
+          "token": "Import App token",
+          "password": "Phone + password (auto-renew)"
         }
       },
       "sms": {
@@ -38,6 +40,15 @@
         "data": {
           "token": "x-auth-token",
           "custnumber": "custNumber (optional)",
+          "area_code": "Region"
+        }
+      },
+      "password": {
+        "title": "Password sign-in",
+        "description": "Sign in with your Nanwang Online app credentials. The integration will silently re-login when the token expires, so no more SMS codes needed. (Set a password in the app first if you haven't.)",
+        "data": {
+          "phone": "Phone number",
+          "password": "Password",
           "area_code": "Region"
         }
       }

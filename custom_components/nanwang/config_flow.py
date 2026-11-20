@@ -32,12 +32,14 @@ from . import async_get_session
 from .api import NanwangApiError, NanwangAuthError, NanwangClient, NanwangError
 from .const import (
     AREA_CODES,
+    AUTH_PASSWORD,
     AUTH_SMS,
     AUTH_TOKEN,
     CONF_AREA_CODE,
     CONF_AUTH_METHOD,
     CONF_CODE,
     CONF_CUSTNUMBER,
+    CONF_PASSWORD,
     CONF_PHONE,
     CONF_TOKEN,
     CONF_UPDATE_INTERVAL_HOURS,
@@ -64,6 +66,15 @@ SMS_SCHEMA = vol.Schema(
     }
 )
 CODE_SCHEMA = vol.Schema({vol.Required(CONF_CODE): str})
+PASSWORD_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_PHONE): TextSelector(TextSelectorConfig(type=TextSelectorType.TEL)),
+        vol.Required(CONF_PASSWORD): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        ),
+        vol.Required(CONF_AREA_CODE, default=DEFAULT_AREA_CODE): AREA_SELECTOR,
+    }
+)
 TOKEN_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_TOKEN): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
@@ -89,6 +100,7 @@ class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
         self._client: NanwangClient | None = None
         self._phone = ""
         self._area = DEFAULT_AREA_CODE
+        self._password = ""
 
     def _new_client(self, **kwargs: Any) -> NanwangClient:
         return NanwangClient(async_get_session(self.hass), **kwargs)
@@ -96,7 +108,9 @@ class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
     # -- 入口 ------------------------------------------------------------------
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return self.async_show_menu(step_id="user", menu_options=[AUTH_SMS, AUTH_TOKEN])
+        return self.async_show_menu(
+            step_id="user", menu_options=[AUTH_SMS, AUTH_TOKEN, AUTH_PASSWORD]
+        )
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         self._phone = entry_data.get(CONF_PHONE) or ""
@@ -106,7 +120,9 @@ class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        return self.async_show_menu(step_id="reauth_confirm", menu_options=[AUTH_SMS, AUTH_TOKEN])
+        return self.async_show_menu(
+            step_id="reauth_confirm", menu_options=[AUTH_SMS, AUTH_TOKEN, AUTH_PASSWORD]
+        )
 
     # -- 短信登录 --------------------------------------------------------------
 
@@ -170,6 +186,46 @@ class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders=placeholders,
         )
 
+    # -- 密码登录 ---------------------------------------------------------------
+
+    async def async_step_password(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        placeholders = {"message": ""}
+        if user_input is not None:
+            self._phone = user_input[CONF_PHONE].strip()
+            self._area = user_input[CONF_AREA_CODE]
+            self._password = user_input[CONF_PASSWORD]
+            if len(self._phone) != 11:
+                errors[CONF_PHONE] = "invalid_phone"
+            else:
+                self._client = self._new_client()
+                try:
+                    await self._client.async_login_password(self._phone, self._password)
+                    users = await self._client.async_get_bound_users()
+                except NanwangAuthError:
+                    errors["base"] = "invalid_auth"
+                except NanwangApiError as err:
+                    errors["base"] = "api_error"
+                    placeholders["message"] = err.display
+                except NanwangError:
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("密码登录时出现意外错误")
+                    errors["base"] = "unknown"
+                else:
+                    return await self._async_finish(AUTH_PASSWORD, users)
+        return self.async_show_form(
+            step_id="password",
+            data_schema=self.add_suggested_values_to_schema(
+                PASSWORD_SCHEMA,
+                {CONF_PHONE: self._phone, CONF_AREA_CODE: self._area},
+            ),
+            errors=errors,
+            description_placeholders=placeholders,
+        )
+
     # -- 导入 token ------------------------------------------------------------
 
     async def async_step_token(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -206,9 +262,7 @@ class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
 
     # -- 收尾 ------------------------------------------------------------------
 
-    async def _async_finish(
-        self, method: str, users: list[dict[str, Any]]
-    ) -> ConfigFlowResult:
+    async def _async_finish(self, method: str, users: list[dict[str, Any]]) -> ConfigFlowResult:
         client = self._client
         assert client is not None
         if not users:
@@ -221,11 +275,11 @@ class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         if self._phone:
             data[CONF_PHONE] = self._phone
+        if self._password:
+            data[CONF_PASSWORD] = self._password
 
         if self.source == SOURCE_REAUTH:
-            return self.async_update_reload_and_abort(
-                self._get_reauth_entry(), data_updates=data
-            )
+            return self.async_update_reload_and_abort(self._get_reauth_entry(), data_updates=data)
 
         numbers = sorted(str(u.get("eleCustNumber") or "") for u in users)
         await self.async_set_unique_id(client.custnumber or self._phone or ",".join(numbers))
@@ -260,11 +314,14 @@ class NanwangOptionsFlow(OptionsFlow):
                         ),
                     ): NumberSelector(
                         NumberSelectorConfig(
-                            min=1, max=24, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="h"
+                            min=1,
+                            max=24,
+                            step=1,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement="h",
                         )
                     )
                 }
             ),
             errors=errors,
         )
-
