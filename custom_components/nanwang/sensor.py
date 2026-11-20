@@ -18,7 +18,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import dt as dt_util
 
 from .const import AREA_CODES, DOMAIN, ELE_TYPES, MANUFACTURER
 from .coordinator import AccountData, NanwangConfigEntry, NanwangCoordinator, to_float
@@ -27,19 +26,8 @@ from .statistics import month_start
 CURRENCY_CNY = "CNY"
 
 
-def _year_start(acc: AccountData) -> datetime | None:
-    if acc.year is None:
-        return None
-    return datetime(acc.year, 1, 1, tzinfo=dt_util.get_default_time_zone())
-
-
 def _month_start(acc: AccountData) -> datetime | None:
     return month_start(acc.month) if acc.month else None
-
-
-def _arrears(acc: AccountData) -> float | None:
-    value = acc.surplus_sum("arrears")
-    return value if value is not None else to_float(acc.user.get("totalOwnedFee"))
 
 
 def _month_cost_estimated(acc: AccountData) -> float | None:
@@ -79,29 +67,7 @@ def _money(**kwargs: Any) -> NanwangSensorEntityDescription:
 
 
 SENSORS: tuple[NanwangSensorEntityDescription, ...] = (
-    # queryUserAccountNumberSurplus（按计量点求和）
-    _money(key="balance", translation_key="balance", value_fn=lambda a: a.surplus_sum("balance")),
-    _money(key="arrears", translation_key="arrears", value_fn=_arrears),
-    _money(
-        key="locked_balance",
-        translation_key="locked_balance",
-        value_fn=lambda a: a.surplus_sum("lockedBalance"),
-    ),
-    # getAnalyzeFeeDetails
-    _energy(
-        key="year_energy",
-        translation_key="year_energy",
-        state_class=SensorStateClass.TOTAL,
-        value_fn=lambda a: to_float((a.yearly or {}).get("totalBillingElectricity")),
-        last_reset_fn=_year_start,
-    ),
-    _money(
-        key="year_cost",
-        translation_key="year_cost",
-        state_class=SensorStateClass.TOTAL,
-        value_fn=lambda a: to_float((a.yearly or {}).get("totalActualAmount")),
-        last_reset_fn=_year_start,
-    ),
+    # queryElecMultiBillList
     _energy(
         key="last_bill_energy",
         translation_key="last_bill_energy",
@@ -122,7 +88,7 @@ SENSORS: tuple[NanwangSensorEntityDescription, ...] = (
         value_fn=lambda a: a.unit_price,
         attrs_fn=_bill_attrs,
     ),
-    # queryDayElectricByMPoint
+    # queryCalendarChartDC
     _energy(
         key="month_energy",
         translation_key="month_energy",

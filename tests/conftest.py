@@ -19,15 +19,10 @@ USER = {
     "totalOwnedFee": "0",
 }
 POINT = {"meteringPointId": "MPID", "meteringPointNumber": "81***17387386", "areaCode": "080000"}
-SURPLUS = [{"meteringPointNumber": "81***17387386", "balance": "88.80", "arrears": "0", "lockedBalance": "1.20"}]
-YEARLY = {
-    "totalBillingElectricity": "1234.5",
-    "totalActualAmount": "765.43",
-    "electricAndChargeList": [
-        {"yearMonth": "2026-09", "billingElectricity": "300", "actualTotalAmount": "180.1"},
-        {"yearMonth": "2026-10", "billingElectricity": "250", "actualTotalAmount": "150.25"},
-        {"yearMonth": "2026-11", "billingElectricity": None, "actualTotalAmount": None},
-    ],
+BILL = {
+    "yearMonth": "2026-10",
+    "billingElectricity": "250",
+    "actualTotalAmount": "150.25",
 }
 
 
@@ -57,8 +52,7 @@ def mock_api() -> Generator[dict[str, AsyncMock]]:
         "async_login_sms": AsyncMock(),
         "async_get_bound_users": AsyncMock(return_value=[USER]),
         "async_get_metering_points": AsyncMock(return_value=[POINT]),
-        "async_get_account_surplus": AsyncMock(return_value=SURPLUS),
-        "async_get_yearly": AsyncMock(return_value=YEARLY),
+        "async_get_monthly_bills": AsyncMock(return_value=[BILL]),
         "async_get_daily": AsyncMock(side_effect=lambda user, point, ym: daily_for(ym)),
     }
 

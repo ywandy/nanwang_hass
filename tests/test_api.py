@@ -1,4 +1,4 @@
-"""协议层测试：AES 向量 + 本地 mock 网关（真实 HTTP，不连外网）。"""
+"""App/mPaaS protocol tests with a local HTTP gateway."""
 
 from __future__ import annotations
 
@@ -11,6 +11,12 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from custom_components.nanwang.api import (
+    P_DAILY,
+    P_LOGIN,
+    P_METERING,
+    P_MONTHLY_BILLS,
+    P_SEND_SMS,
+    P_USERS,
     NanwangApiError,
     NanwangAuthError,
     NanwangClient,
@@ -18,33 +24,51 @@ from custom_components.nanwang.api import (
     encrypt_param,
 )
 
-# 由 reverse/nanwang/poc/nw.py 的纯 Python AES 生成；该实现已与 openssl 对照，且被真实网关成功解密
 VECTORS = [
     (
-        {"areaCode": "030000", "acctId": "13800000000", "logonChan": "3", "credType": "11", "code": "123456"},
-        "9CNb15klDDhfWG2Ff0kCVlKeMp5/iIgz3iWw9ic7fM1hNUkFPvgGBLJ3BQSCKv53lXE9TGjpLL0803Clp2HzrozsC7cOEnXj/UbfMLeAyHOTthL/D3bWnMAzGH94B3Cv",
+        {
+            "phoneNumber": "13800000000",
+            "credType": "11",
+            "vcCode": "123456",
+            "areaCode": "030000",
+            "defaultAreaCode": "030000",
+        },
+        "tQB+TLbGQBn6HHBz3nRv2mKpNtmz1kBrsXkplsSeKTp05Cy3snpLuFGYsiLemvCVj+6rbC46DBQOY9ck41r2MkU/p4uRHXKuSF7e+0SrhK73OpEKQdasf8Is/VtUB5RZ9UvsKCVPMARqFWtUYEFfTw==",
     ),
-    # 恰好 16 字节：ZeroPadding 不追加整块
-    ({"a": "01234567"}, "sEkaPP9nsgJXxO4l2tUizg=="),
+    ({"a": "01234567"}, "klz79h8k2nla4Tw0PoJZ/Q=="),
 ]
 
 TOKEN = "tok-login"
-USER = {"eleCustNumber": "0300001234567890", "bindingId": "B1", "areaCode": "030000"}
+ROLLED_TOKEN = "tok-refreshed"
+USER = {
+    "eleCustNumber": "0300001234567890",
+    "bindingId": "B1",
+    "areaCode": "030000",
+    "supplyUnit": "08001210",
+}
 POINT = {"meteringPointId": "MPID", "meteringPointNumber": "MPNO", "areaCode": "030000"}
+BILL = {
+    "eleCustNumber": "0300001234567890",
+    "electricityBillYearMonth": 202611,
+    "receieElectricity": "150.25",
+    "totalPower": "250",
+}
+DAILY = {
+    "totalPower": "12.5",
+    "result": [{"date": "2026-11-01", "power": "3.2"}],
+}
 
 
 @pytest.mark.parametrize(("obj", "expected"), VECTORS)
-def test_encrypt_matches_poc(obj: dict[str, Any], expected: str) -> None:
+def test_app_encrypt_vector(obj: dict[str, Any], expected: str) -> None:
     assert encrypt_param(obj) == expected
     assert json.loads(decrypt_param(expected)) == obj
 
 
 class Gateway:
-    """最小 mock 网关：行为对齐 95598.csg.cn 的已知响应。"""
-
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any], dict[str, str]]] = []
-        self.analyze_reject_number = False
+        self.auth_sta = "04"
 
     async def handle(self, request: web.Request) -> web.Response:
         path = "/" + request.match_info["path"]
@@ -53,128 +77,148 @@ class Gateway:
             body = json.loads(decrypt_param(body["param"]))
         self.calls.append((path, body, dict(request.headers)))
 
-        if path == "/center/sendMsg":
+        if path == P_SEND_SMS:
             if len(body.get("phoneNumber", "")) != 11:
                 return web.json_response({"sta": "01", "message": "手机号码格式不正确"})
             return web.json_response({"sta": "00"})
-        if path == "/center/login":
-            if body.get("code") != "123456":
+
+        if path == P_LOGIN:
+            if body.get("vcCode") != "123456":
                 return web.json_response({"sta": "0001003", "message": "验证码校验失败!"})
             return web.json_response(
                 {"sta": "00", "data": None},
-                headers={"x-auth-token": TOKEN, "custnumber": "CUST1",
-                         "Set-Cookie": "CAMSID=abc; Path=/"},
+                headers={
+                    "x-auth-token": TOKEN,
+                    "Set-Cookie": "CAMSID=abc; Path=/",
+                },
             )
 
         if request.headers.get("x-auth-token") != TOKEN:
-            # 网关对未登录请求也会下发游客 token，客户端不能采纳
-            return web.json_response({"sta": "04"}, headers={"x-auth-token": "guest"})
+            return web.json_response(
+                {"sta": self.auth_sta}, headers={"x-auth-token": "guest"}
+            )
 
-        if path == "/eleCustNumber/queryBindEleUsers":
-            return web.json_response({"sta": "00", "data": [USER]})
-        if path == "/charge/getAnalyzeFeeDetails":
-            if self.analyze_reject_number and body["meteringPointId"] == "MPNO":
-                return web.json_response({"sta": "01", "message": "参数错误"})
+        if path == P_USERS:
             return web.json_response(
-                {"sta": "00", "data": {"totalBillingElectricity": "100", "electricAndChargeList": []}},
-                headers={"x-auth-token": "tok-refreshed"},
+                {"sta": "00", "data": [USER]},
+                headers={"x-auth-token": ROLLED_TOKEN, "Set-Cookie": "SESSION=session; Path=/"},
             )
-        if path == "/charge/queryDayElectricByMPoint":
-            data = {"totalPower": "12.5", "result": [{"date": "2026-11-01", "power": "3.2"}]}
+        if path == P_METERING:
+            return web.json_response({"sta": "00", "data": [POINT]})
+        if path == P_MONTHLY_BILLS:
             return web.json_response(
-                {"sta": "00", "data": encrypt_param(data)}, headers={"need-decrypto": "true"}
+                {"sta": "00", "data": {"billUserAndYearMonth": [BILL], "bindsListTotal": 1}}
             )
-        if path == "/charge/queryUserAccountNumberSurplus":
-            if not body.get("areaCode") or body.get("eleCustId") != "B1":
-                return web.json_response({"sta": "01", "message": "入参校验失败"})
+        if path == P_DAILY:
             return web.json_response(
-                {"sta": "00", "data": [{"balance": "88.80", "arrears": "0", "lockedBalance": "0"}]}
+                {"sta": "00", "data": encrypt_param(DAILY)},
+                headers={"need-decrypto": "true"},
             )
         return web.json_response({"sta": "02", "message": "系统异常"})
 
 
 @pytest.fixture
 async def gateway(socket_enabled):
-    gw = Gateway()
+    gateway = Gateway()
     app = web.Application()
-    app.router.add_post("/ucs/ma/wt/{path:.*}", gw.handle)
+    app.router.add_post("/{path:.*}", gateway.handle)
     server = TestServer(app, host="127.0.0.1")
     await server.start_server()
     async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as session:
-        yield gw, server, session
+        yield gateway, server, session
     await server.close()
 
 
-def _client(server: TestServer, session: aiohttp.ClientSession, **kwargs: Any) -> NanwangClient:
+def _client(server: TestServer, session: aiohttp.ClientSession, **kwargs: Any):
     return NanwangClient(session, base_url=str(server.make_url("")), **kwargs)
 
 
-async def test_sms_login_adopts_token_and_cookie(gateway) -> None:
-    gw, server, session = gateway
+async def test_app_sms_login_and_rolling_token(gateway) -> None:
+    gateway_object, server, session = gateway
     client = _client(server, session)
     updates: list[dict[str, Any]] = []
     client.on_auth_update = lambda: updates.append(client.auth_state)
 
     await client.async_send_sms("13800000000", "030000")
     assert await client.async_login_sms("13800000000", "123456", "030000") == TOKEN
-    assert client.custnumber == "CUST1"
     assert client.cookies == {"CAMSID": "abc"}
-    assert updates[-1]["token"] == TOKEN
-
-    login_body = gw.calls[1][1]
-    assert login_body["credType"] == "11" and login_body["logonChan"] == "3"
-    assert gw.calls[1][2]["need-crypto"] == "true"
 
     assert await client.async_get_bound_users() == [USER]
-    headers = gw.calls[-1][2]
-    assert headers["x-auth-token"] == TOKEN
-    assert headers["custNumber"] == "CUST1"
-    assert headers["Cookie"] == "CAMSID=abc"
+    assert client.token == ROLLED_TOKEN
+    assert client.cookies == {"CAMSID": "abc", "SESSION": "session"}
+    assert updates[-1]["token"] == ROLLED_TOKEN
+
+    sms, login, users = gateway_object.calls
+    assert sms[0] == P_SEND_SMS
+    assert login[1] == {
+        "phoneNumber": "13800000000",
+        "credType": "11",
+        "vcCode": "123456",
+        "areaCode": "030000",
+        "defaultAreaCode": "030000",
+    }
+    assert login[2]["need-crypto"] == "true"
+    assert users[2]["x-auth-token"] == TOKEN
+    assert users[2]["Cookie"] == "CAMSID=abc"
+    assert users[2]["channelCode"] == "4"
 
 
-async def test_errors(gateway) -> None:
+async def test_app_errors_and_guest_token_rejected(gateway) -> None:
     _, server, session = gateway
     client = _client(server, session)
-    with pytest.raises(NanwangApiError) as err:
+    with pytest.raises(NanwangApiError) as error:
         await client.async_send_sms("0", "030000")
-    assert err.value.sta == "01"
+    assert error.value.sta == "01"
 
-    with pytest.raises(NanwangApiError) as err:
+    with pytest.raises(NanwangApiError) as error:
         await client.async_login_sms("13800000000", "000000", "030000")
-    assert err.value.sta == "0001003"
-    assert err.value.display == "短信验证码校验失败"
+    assert error.value.sta == "0001003"
 
     client.token = "expired"
     with pytest.raises(NanwangAuthError):
         await client.async_get_bound_users()
-    assert client.token == "expired"  # 游客 token 没被采纳
+    assert client.token == "expired"
 
 
-async def test_decrypt_response_and_token_refresh(gateway) -> None:
-    gw, server, session = gateway
+@pytest.mark.parametrize("sta", ["0408", "1010", "0101"])
+async def test_app_session_expiry_statuses(gateway, sta: str) -> None:
+    _, server, session = gateway
+    client = _client(server, session, token="expired")
+    gateway[0].auth_sta = sta
+    with pytest.raises(NanwangAuthError) as error:
+        await client.async_get_bound_users()
+    assert error.value.sta == sta
+
+
+async def test_app_queries_and_decryption(gateway) -> None:
+    gateway_object, server, session = gateway
     client = _client(server, session, token=TOKEN)
-    daily = await client.async_get_daily(USER, POINT, "202611")
-    assert daily["totalPower"] == "12.5"
-    assert gw.calls[-1][1]["meteringPointId"] == "MPID"
 
-    yearly = await client.async_get_yearly(USER, POINT, 2026)
-    assert yearly["totalBillingElectricity"] == "100"
-    assert gw.calls[-1][1]["meteringPointId"] == "MPNO"
-    assert client.token == "tok-refreshed"
+    assert await client.async_get_metering_points(USER) == [POINT]
+    assert gateway_object.calls[-1][1] == {
+        "areaCode": "030000",
+        "eleCustNumberList": [{"eleCustId": "B1", "areaCode": "030000"}],
+    }
+
+    bills = await client.async_get_monthly_bills("202611", owner_number=USER["eleCustNumber"])
+    assert bills == [
+        {
+            **BILL,
+            "yearMonth": "2026-11",
+            "billingElectricity": "250",
+            "actualTotalAmount": "150.25",
+        }
+    ]
+    assert gateway_object.calls[-1][0] == P_MONTHLY_BILLS
+    assert gateway_object.calls[-1][1]["yearMonth"] == "202611"
+
+    assert await client.async_get_daily(USER, POINT, "202611") == DAILY
+    assert gateway_object.calls[-1][1]["meteringPointId"] == "MPID"
+    assert gateway_object.calls[-1][1]["meteringPointNumber"] == "MPNO"
 
 
-async def test_yearly_falls_back_to_metering_point_id(gateway) -> None:
-    gw, server, session = gateway
-    gw.analyze_reject_number = True
-    client = _client(server, session, token=TOKEN)
-    await client.async_get_yearly(USER, POINT, 2026)
-    assert [c[1]["meteringPointId"] for c in gw.calls] == ["MPNO", "MPID"]
-
-
-async def test_account_surplus(gateway) -> None:
-    gw, server, session = gateway
-    client = _client(server, session, token=TOKEN)
-    rows = await client.async_get_account_surplus(USER)
-    assert rows[0]["balance"] == "88.80"
-    assert gw.calls[-1][1] == {"areaCode": "030000", "eleCustId": "B1"}
-    assert gw.calls[-1][2]["need-crypto"] == "true"
+async def test_removed_web_capabilities_are_not_exposed(gateway) -> None:
+    _, server, session = gateway
+    client = _client(server, session)
+    assert not hasattr(client, "async_get_account_surplus")
+    assert not hasattr(client, "async_get_yearly")

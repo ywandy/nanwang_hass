@@ -16,7 +16,7 @@ CONF_AUTH_METHOD = "auth_method"
 AUTH_SMS = "sms"
 AUTH_TOKEN = "token"
 
-# 登录/余额查询用的地区编码（前端 defaultAreaCode）
+# 登录/电费查询用的地区编码（App 登录 defaultAreaCode）
 AREA_CODES: dict[str, str] = {
     "080000": "广州",
     "030000": "广东",

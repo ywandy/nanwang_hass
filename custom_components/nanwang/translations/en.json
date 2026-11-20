@@ -6,7 +6,7 @@
         "description": "Choose how to sign in. Only read-only query APIs are used.",
         "menu_options": {
           "sms": "Phone number + SMS code",
-          "token": "Import browser token"
+          "token": "Import App token"
         }
       },
       "reauth_confirm": {
@@ -14,7 +14,7 @@
         "description": "The 95598.csg.cn token has expired. Please sign in again.",
         "menu_options": {
           "sms": "Phone number + SMS code",
-          "token": "Import browser token"
+          "token": "Import App token"
         }
       },
       "sms": {
@@ -33,8 +33,8 @@
         }
       },
       "token": {
-        "title": "Import token",
-        "description": "Sign in at {url} in a browser, then open DevTools → Application → Session Storage and copy `token` (and optionally `custnumber`).",
+        "title": "Import App token",
+        "description": "Paste the x-auth-token from a signed-in App-channel session.",
         "data": {
           "token": "x-auth-token",
           "custnumber": "custNumber (optional)",
@@ -73,21 +73,6 @@
   },
   "entity": {
     "sensor": {
-      "balance": {
-        "name": "Balance"
-      },
-      "arrears": {
-        "name": "Arrears"
-      },
-      "locked_balance": {
-        "name": "Locked balance"
-      },
-      "year_energy": {
-        "name": "Energy this year"
-      },
-      "year_cost": {
-        "name": "Cost this year"
-      },
       "last_bill_energy": {
         "name": "Latest billed month energy",
         "state_attributes": {

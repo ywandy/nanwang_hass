@@ -40,11 +40,10 @@ def to_float(value: Any) -> float | None:
         return None
 
 
-def latest_bill(yearly: dict[str, Any] | None) -> dict[str, Any] | None:
-    """electricAndChargeList 中最近一个有电量的月份（yearMonth 实测形如 2026-10）。"""
-    months = (yearly or {}).get("electricAndChargeList") or []
-    valid = [m for m in months if to_float(m.get("billingElectricity")) is not None]
-    return max(valid, key=lambda m: str(m.get("yearMonth") or ""), default=None)
+def latest_bill(bills: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """Return the newest bill that contains an energy value."""
+    valid = [bill for bill in bills or [] if to_float(bill.get("billingElectricity")) is not None]
+    return max(valid, key=lambda bill: str(bill.get("yearMonth") or ""), default=None)
 
 
 def latest_day(daily: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -81,18 +80,11 @@ class AccountData:
 
     user: dict[str, Any]
     point: dict[str, Any] | None = None
-    surplus: list[dict[str, Any]] = field(default_factory=list)  # 每计量点余额
-    year: int | None = None
-    yearly: dict[str, Any] | None = None  # getAnalyzeFeeDetails(当年)
     last_bill: dict[str, Any] | None = None  # 最近有数据的账单月
     month: str | None = None  # yyyyMM
     daily: dict[str, Any] | None = None  # queryDayElectricByMPoint(当月)
     recent_days: list[dict[str, Any]] = field(default_factory=list)  # 最近 RECENT_DAYS 天（可跨月）
     latest_day: dict[str, Any] | None = None
-
-    def surplus_sum(self, key: str) -> float | None:
-        values = [v for r in self.surplus if (v := to_float(r.get(key))) is not None]
-        return sum(values) if values else None
 
     @property
     def unit_price(self) -> float | None:
@@ -159,12 +151,6 @@ class NanwangCoordinator(DataUpdateCoordinator[dict[str, AccountData]]):
             if not number:
                 continue
             acc = AccountData(user=user)
-            acc.surplus = (
-                await self._optional(
-                    self.client.async_get_account_surplus(user), f"户号 {number} 余额"
-                )
-                or []
-            )
             acc.point = await self._get_point(user, number)
             if acc.point is not None:
                 await self._fill_usage(acc, number, now)
@@ -184,18 +170,16 @@ class NanwangCoordinator(DataUpdateCoordinator[dict[str, AccountData]]):
         client, user, point = self.client, acc.user, acc.point
         assert point is not None
 
-        acc.year = now.year
-        acc.yearly = await self._optional(
-            client.async_get_yearly(user, point, now.year), f"户号 {number} {now.year} 年度电费"
-        )
-        acc.last_bill = latest_bill(acc.yearly)
-        if acc.last_bill is None:
-            # 年初当年还没出账单，往前找一年
-            prev_year = await self._optional(
-                client.async_get_yearly(user, point, now.year - 1),
-                f"户号 {number} {now.year - 1} 年度电费",
+        for month_offset in range(13):
+            month = now.replace(day=1) - timedelta(days=31 * month_offset)
+            year_month = month.strftime("%Y%m")
+            bills = await self._optional(
+                client.async_get_monthly_bills(year_month, owner_number=number),
+                f"户号 {number} {year_month} 月账单",
             )
-            acc.last_bill = latest_bill(prev_year)
+            acc.last_bill = latest_bill(bills)
+            if acc.last_bill is not None:
+                break
 
         # 同一次刷新里同一个月只查一次（传感器和统计导入共用）
         cache: dict[str, dict[str, Any] | None] = {}

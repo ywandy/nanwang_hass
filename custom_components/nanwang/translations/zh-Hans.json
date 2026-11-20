@@ -6,7 +6,7 @@
         "description": "选择登录方式。只调用查询接口，不缴费、不绑定、不改资料。",
         "menu_options": {
           "sms": "手机号 + 短信验证码",
-          "token": "导入浏览器 token"
+          "token": "导入 App token"
         }
       },
       "reauth_confirm": {
@@ -14,7 +14,7 @@
         "description": "南网在线的登录 token 已失效，请重新登录。",
         "menu_options": {
           "sms": "手机号 + 短信验证码",
-          "token": "导入浏览器 token"
+          "token": "导入 App token"
         }
       },
       "sms": {
@@ -33,8 +33,8 @@
         }
       },
       "token": {
-        "title": "导入 token",
-        "description": "在浏览器登录 {url} 后，打开开发者工具 → Application → Session Storage，复制 `token`（可选再复制 `custnumber`）。",
+        "title": "导入 App token",
+        "description": "粘贴已登录 App 通道的 x-auth-token。",
         "data": {
           "token": "x-auth-token",
           "custnumber": "custNumber（可选）",
@@ -73,21 +73,6 @@
   },
   "entity": {
     "sensor": {
-      "balance": {
-        "name": "电费余额"
-      },
-      "arrears": {
-        "name": "欠费金额"
-      },
-      "locked_balance": {
-        "name": "锁定余额"
-      },
-      "year_energy": {
-        "name": "今年电量"
-      },
-      "year_cost": {
-        "name": "今年电费"
-      },
       "last_bill_energy": {
         "name": "最近账单月电量",
         "state_attributes": {

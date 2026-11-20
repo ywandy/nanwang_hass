@@ -1,15 +1,4 @@
-"""南网在线 Web 端（95598.csg.cn/ucs/ma/wt）异步客户端。
-
-协议移植自 reverse/nanwang/poc/nw.py（2026-11-12 已在真实网关做过无凭据验证）：
-
-* 请求加密：``{"param": Base64(AES-128-CBC-ZeroPadding(JSON))}`` + 请求头 ``need-crypto: true``
-* 响应解密：响应头 ``need-decrypto`` 且 ``data`` 为字符串时，用同一 key/iv 解密后 JSON.parse
-* 认证：``x-auth-token``（必需）、``custNumber``（有就带）
-* 状态码：00 成功 / 01 参数错误 / 02 系统异常 / 04 未登录 / 0500 未绑定户号
-
-本模块只依赖 aiohttp + cryptography（两者都是 Home Assistant core 依赖），不 import homeassistant，
-方便单独测试。只调用查询类接口；sendMsg / login 是登录必需的两个有副作用请求，绝不自动重试。
-"""
+"""Async client for the CSG Nanwang App/mPaaS electricity endpoints."""
 
 from __future__ import annotations
 
@@ -26,21 +15,26 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 _LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://95598.csg.cn"
-API_PREFIX = "/ucs/ma/wt"
+P_SEND_SMS = "/mp/w2/wx/component/common/sendMsgValidation"
+P_LOGIN = "/mp/w2/wx/userauth/user/manage/login"
+P_USERS = "/mp/w2/wx/portal/eleCustNumber/queryBindEleUsers"
+P_METERING = "/mp/w2/wx/elecmanageImp/electric-fee/queryMeteringPointList"
+P_MONTHLY_BILLS = "/mp/w2/wx/elecmanageImp/electricity-bill/queryElecMultiBillList"
+P_DAILY = "/mp/w2/wx/power-eff/electric-daily/queryCalendarChartDC"
 
-# Web bundle 1.6.230 中 47e3 模块混淆串经 cf45.Se() 还原，与社区项目一致
-AES_KEY = b"zFujxJSrfmClqtKO"
-AES_IV = b"oMShoRXZnAivcCyR"
-
+# Restored from App mini-programs 0000000000000111 and 0000000000000123.
+AES_KEY = b"cOdHFNHUNkZrjNaN"
+AES_IV = b"oMChoRLZnTivcQyR"
 USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Linux; Android 16; V2548A Build/BP2A.250605.031.A3; wv) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 "
+    "Mobile Safari/537.36"
 )
 
 STA_SUCCESS = "00"
-STA_NO_LOGIN = "04"
 STA_NO_DATA = "09"
 STA_NO_BINDS = "0500"
+STA_AUTH_GROUP = {"04", "0408", "1010", "0101"}
 
 STA_HINTS = {
     "09": "该计量点没有数据（例如长期未用电的充电桩）",
@@ -52,59 +46,41 @@ STA_HINTS = {
     "00010001": "该手机号未注册/未开通在线服务",
     "0408": "账号已在别处登录（被踢下线）",
     "1010": "手机号被其他账户绑定，被强制下线",
-    "9999": "新账号登录被限制，请稍后再试",
+    "0101": "登录方式已变化，请重新登录",
+    "9999": "新账号登录被限制，请稍后重试",
 }
 
-P_SEND_MSG = "/center/sendMsg"
-P_LOGIN = "/center/login"
-P_BIND_USERS = "/eleCustNumber/queryBindEleUsers"
-P_METERING = "/charge/queryMeteringPoint"
-P_SURPLUS = "/charge/queryUserAccountNumberSurplus"
-P_ANALYZE = "/charge/getAnalyzeFeeDetails"
-P_DAILY = "/charge/queryDayElectricByMPoint"
-
-# 只保留会话类 cookie，负载均衡 cookie 没意义
 _SESSION_COOKIES = ("CAMSID", "SESSION", "JSESSIONID")
 
 
-# ---------------------------------------------------------------------------
-# 加解密
-# ---------------------------------------------------------------------------
-
-
 def _zero_pad(data: bytes) -> bytes:
-    """CryptoJS ZeroPadding：不足 16 字节补 0；已对齐则不追加整块。"""
     return data + b"\x00" * ((-len(data)) % 16)
 
 
 def encrypt_param(obj: Any, key: bytes = AES_KEY, iv: bytes = AES_IV) -> str:
-    """对象 -> 紧凑 JSON -> ZeroPadding -> AES-128-CBC -> Base64（即前端 encryptAES）。"""
+    """Apply the App bundle's AES-128-CBC ZeroPadding envelope."""
     raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    enc = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
-    return base64.b64encode(enc.update(_zero_pad(raw)) + enc.finalize()).decode("ascii")
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    encrypted = encryptor.update(_zero_pad(raw)) + encryptor.finalize()
+    return base64.b64encode(encrypted).decode("ascii")
 
 
-def decrypt_param(b64: str, key: bytes = AES_KEY, iv: bytes = AES_IV) -> str:
-    dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
-    raw = dec.update(base64.b64decode(b64)) + dec.finalize()
+def decrypt_param(encoded: str, key: bytes = AES_KEY, iv: bytes = AES_IV) -> str:
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    raw = decryptor.update(base64.b64decode(encoded)) + decryptor.finalize()
     return raw.rstrip(b"\x00").decode("utf-8", "replace")
 
 
-# ---------------------------------------------------------------------------
-# 异常
-# ---------------------------------------------------------------------------
-
-
 class NanwangError(Exception):
-    """所有可预期错误的基类。"""
+    """Base class for expected integration errors."""
 
 
 class NanwangConnectionError(NanwangError):
-    """网络错误、HTTP 错误、响应不是 JSON、解密失败。"""
+    """Network, HTTP, JSON, or decryption failure."""
 
 
 class NanwangApiError(NanwangError):
-    """业务失败（sta != 00）。"""
+    """Business failure (sta is not 00)."""
 
     def __init__(self, sta: str, message: str | None, path: str) -> None:
         self.sta = str(sta)
@@ -117,23 +93,22 @@ class NanwangApiError(NanwangError):
 
     @property
     def display(self) -> str:
-        """给配置界面看的简短文案。"""
         return STA_HINTS.get(self.sta) or self.server_message or f"sta={self.sta}"
 
 
 class NanwangAuthError(NanwangApiError):
-    """token 失效 / 未登录（sta=04）。"""
+    """The App session is invalid and the user must sign in again."""
 
 
 class NanwangNoBindsError(NanwangApiError):
-    """账号没有绑定户号（sta=0500）。"""
+    """The account has no bound electricity accounts."""
 
 
 def _check(res: dict[str, Any], path: str) -> Any:
     sta = str(res.get("sta"))
     if sta == STA_SUCCESS:
         return res.get("data")
-    if sta == STA_NO_LOGIN:
+    if sta in STA_AUTH_GROUP:
         raise NanwangAuthError(sta, res.get("message"), path)
     if sta == STA_NO_BINDS:
         raise NanwangNoBindsError(sta, res.get("message"), path)
@@ -141,17 +116,11 @@ def _check(res: dict[str, Any], path: str) -> Any:
 
 
 def ele_cust_id(user: dict[str, Any]) -> str:
-    """接口里的 eleCustId 是绑定关系 bindingId，不是 16 位缴费号 eleCustNumber。"""
     return str(user.get("bindingId") or user.get("eleCustId") or "")
 
 
-# ---------------------------------------------------------------------------
-# 客户端
-# ---------------------------------------------------------------------------
-
-
 class NanwangClient:
-    """JSON POST + 可选 AES + token 自动续期 + need-decrypto 解密。"""
+    """Aiohttp client preserving the integration's public façade."""
 
     def __init__(
         self,
@@ -167,9 +136,9 @@ class NanwangClient:
         self._base = base_url.rstrip("/")
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self.token = token
+        # Kept for existing config entries; the App channel does not send this header.
         self.custnumber = custnumber
         self.cookies: dict[str, str] = dict(cookies or {})
-        # token/custNumber 变化时回调（用于写回 config entry）
         self.on_auth_update: Callable[[], None] | None = None
 
     @property
@@ -181,24 +150,19 @@ class NanwangClient:
         }
 
     def _adopt_auth(self, headers: Any) -> None:
-        """只在 sta=00 时采纳响应头里的 token，避免把游客 token 存下来。"""
         changed = False
         new_token = headers.get("x-auth-token")
         if new_token and new_token != self.token:
             self.token = new_token
             changed = True
-        cust = headers.get("custnumber")
-        if cust and cust != self.custnumber:
-            self.custnumber = cust
-            changed = True
+        for line in headers.getall("Set-Cookie", []):
+            name_value = line.split(";", 1)[0]
+            name, separator, value = name_value.strip().partition("=")
+            if separator and name in _SESSION_COOKIES and self.cookies.get(name) != value:
+                self.cookies[name] = value.strip()
+                changed = True
         if changed and self.on_auth_update is not None:
             self.on_auth_update()
-
-    def _remember_cookies(self, headers: Any) -> None:
-        for line in headers.getall("Set-Cookie", []):
-            name, sep, value = line.split(";", 1)[0].partition("=")
-            if sep and name.strip() in _SESSION_COOKIES:
-                self.cookies[name.strip()] = value.strip()
 
     async def _post(
         self,
@@ -217,104 +181,92 @@ class NanwangClient:
             "Origin": BASE_URL,
             "Referer": BASE_URL + "/",
             "User-Agent": USER_AGENT,
+            "channelCode": "4",
+            "need-crypto": "false",
         }
         if auth and self.token:
             headers["x-auth-token"] = self.token
-        if auth and self.custnumber:
-            headers["custNumber"] = self.custnumber
         if self.cookies:
-            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+            headers["Cookie"] = "; ".join(f"{key}={value}" for key, value in self.cookies.items())
         if crypto:
             headers["need-crypto"] = "true"
-            data_obj: dict[str, Any] = {"param": encrypt_param(payload)}
+            request_body: dict[str, Any] = {"param": encrypt_param(payload)}
         else:
-            data_obj = payload
-        data = json.dumps(data_obj, ensure_ascii=False).encode("utf-8")
-        url = f"{self._base}{API_PREFIX}{path}"
+            request_body = payload
+        data = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
+        url = f"{self._base}{path}"
 
         for attempt in range(retries + 1):
             try:
                 async with self._session.post(
                     url, data=data, headers=headers, timeout=self._timeout
-                ) as resp:
-                    text = await resp.text(encoding="utf-8", errors="replace")
-                    status = resp.status
-                    resp_headers = resp.headers
+                ) as response:
+                    text = await response.text(encoding="utf-8", errors="replace")
+                    status = response.status
+                    response_headers = response.headers
                 break
-            except (aiohttp.ClientError, TimeoutError) as err:
+            except (aiohttp.ClientError, TimeoutError) as error:
                 if attempt >= retries:
-                    raise NanwangConnectionError(f"网络错误 {path}: {err!r}") from err
+                    raise NanwangConnectionError(f"网络错误 {path}: {error!r}") from error
                 await asyncio.sleep(0.5 * (attempt + 1))
 
         if status >= 400:
             raise NanwangConnectionError(f"HTTP {status} {path}: {text[:200]}")
-        self._remember_cookies(resp_headers)
         if not text.strip():
             raise NanwangConnectionError(f"空响应 {path}（HTTP {status}）")
 
-        # 网关偶尔在 JSON 前后夹带杂质，截取第一个 { 到最后一个 }
         start, end = text.find("{"), text.rfind("}")
         if start < 0 or end < start:
             raise NanwangConnectionError(f"响应不是 JSON {path}: {text[:200]}")
         try:
-            res: dict[str, Any] = json.loads(text[start : end + 1])
-        except json.JSONDecodeError as err:
-            raise NanwangConnectionError(f"响应 JSON 解析失败 {path}") from err
+            result: dict[str, Any] = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as error:
+            raise NanwangConnectionError(f"响应 JSON 解析失败 {path}") from error
 
-        flag = resp_headers.get("need-decrypto")
-        if flag and str(flag).lower() != "false" and isinstance(res.get("data"), str):
+        decrypt_flag = response_headers.get("need-decrypto")
+        if decrypt_flag and decrypt_flag.lower() != "false" and isinstance(result.get("data"), str):
             try:
-                res["data"] = json.loads(decrypt_param(res["data"]))
-            except (ValueError, TypeError) as err:
-                raise NanwangConnectionError(f"响应解密失败 {path}: {err}") from err
+                result["data"] = json.loads(decrypt_param(result["data"]))
+            except (ValueError, TypeError) as error:
+                raise NanwangConnectionError(f"响应解密失败 {path}: {error}") from error
 
-        _LOGGER.debug("%s -> sta=%s message=%r", path, res.get("sta"), res.get("message"))
-        if str(res.get("sta")) == STA_SUCCESS:
-            self._adopt_auth(resp_headers)
-        return res
-
-    # -- 登录 ----------------------------------------------------------------
+        _LOGGER.debug("%s -> sta=%s message=%r", path, result.get("sta"), result.get("message"))
+        if str(result.get("sta")) == STA_SUCCESS:
+            self._adopt_auth(response_headers)
+        return result
 
     async def async_send_sms(self, phone: str, area_code: str) -> None:
-        """发登录短信验证码（vcType=1 登录 / msgType=1 验证码）。"""
-        res = await self._post(
-            P_SEND_MSG,
-            {"areaCode": area_code, "phoneNumber": phone, "vcType": "1", "msgType": "1"},
+        result = await self._post(
+            P_SEND_SMS,
+            {"phoneNumber": phone, "vcType": "1"},
             auth=False,
             retries=0,
         )
-        _check(res, P_SEND_MSG)
+        _check(result, P_SEND_SMS)
 
     async def async_login_sms(self, phone: str, code: str, area_code: str) -> str:
-        """短信验证码登录，成功后 token 在响应头 x-auth-token。"""
         self.token = None
-        res = await self._post(
+        result = await self._post(
             P_LOGIN,
             {
+                "phoneNumber": phone,
+                "credType": "11",
+                "vcCode": code,
                 "areaCode": area_code,
-                "acctId": phone,
-                "logonChan": "3",  # 网上营业厅
-                "credType": "11",  # 手机短信
-                "code": code,
+                "defaultAreaCode": area_code,
             },
             crypto=True,
             auth=False,
             retries=0,
         )
-        sta = str(res.get("sta"))
-        if sta != STA_SUCCESS:
-            # 登录接口的 sta=04 不是 token 失效，统一按业务失败处理
-            raise NanwangApiError(sta, res.get("message"), P_LOGIN)
+        _check(result, P_LOGIN)
         if not self.token:
-            raise NanwangConnectionError("登录返回 sta=00 但响应头没有 x-auth-token")
+            raise NanwangConnectionError("登录成功但响应头没有 x-auth-token")
         return self.token
 
-    # -- 查询 ----------------------------------------------------------------
-
     async def async_get_bound_users(self) -> list[dict[str, Any]]:
-        """绑定户号列表；没有绑定时返回空列表。"""
         try:
-            return _check(await self._post(P_BIND_USERS, {}), P_BIND_USERS) or []
+            return _check(await self._post(P_USERS, {}), P_USERS) or []
         except NanwangNoBindsError:
             return []
 
@@ -325,72 +277,65 @@ class NanwangClient:
             "eleCustNumberList": [{"eleCustId": ele_cust_id(user), "areaCode": area}],
         }
         try:
-            return _check(await self._post(P_METERING, body, crypto=True), P_METERING) or []
+            return _check(await self._post(P_METERING, body), P_METERING) or []
         except NanwangNoBindsError:
             return []
 
-    async def async_get_account_surplus(self, user: dict[str, Any]) -> list[dict[str, Any]]:
-        """按计量点的余额：每项含 balance / arrears / lockedBalance（2026-11-12 真实账号实测）。"""
-        body = {"areaCode": str(user.get("areaCode") or ""), "eleCustId": ele_cust_id(user)}
-        return _check(await self._post(P_SURPLUS, body, crypto=True), P_SURPLUS) or []
-
-    async def async_get_yearly(
-        self, user: dict[str, Any], point: dict[str, Any], year: int
-    ) -> dict[str, Any]:
-        """年度每月电量/电费（getAnalyzeFeeDetails）。
-
-        实测 yearMonth 形如 "2026-01"；meteringPointId 被服务端忽略（真正起作用的是
-        eleCustId + areaCode + 年份），保留“先号码后 ID”的回退只为容错。
-        """
-        area = str(point.get("areaCode") or user.get("areaCode") or "")
-        candidates = [
-            str(point[k]) for k in ("meteringPointNumber", "meteringPointId") if point.get(k)
-        ] or [""]
-        last: NanwangApiError | None = None
-        for value in candidates:
+    async def async_get_monthly_bills(
+        self, year_month: str, cust_number: str = "", *, owner_number: str | None = None
+    ) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        page = 1
+        while page <= 20:
             body = {
-                "areaCode": area,
-                "electricityBillYear": year,
-                "eleCustId": ele_cust_id(user),
-                "meteringPointId": value,
+                "custNumber": cust_number,
+                "yearMonth": year_month,
+                "pageSize": 50,
+                "pageNum": page,
+                "keyword": "",
             }
-            try:
-                return _check(await self._post(P_ANALYZE, body, crypto=True), P_ANALYZE) or {}
-            except NanwangAuthError:
-                raise
-            except NanwangApiError as err:
-                last = err
-        assert last is not None
-        raise last
+            data = _check(await self._post(P_MONTHLY_BILLS, body), P_MONTHLY_BILLS)
+            rows: list[dict[str, Any]] = []
+            if isinstance(data, list):
+                rows = data
+            elif isinstance(data, dict):
+                rows = (
+                    data.get("billUserAndYearMonth")
+                    or data.get("billList")
+                    or data.get("list")
+                    or data.get("records")
+                    or data.get("rows")
+                    or []
+                )
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if owner_number and str(row.get("eleCustNumber") or "") != owner_number:
+                    continue
+                bill = dict(row)
+                month = str(row.get("electricityBillYearMonth") or row.get("yearMonth") or "")
+                if len(month) == 6:
+                    month = f"{month[:4]}-{month[4:]}"
+                bill["yearMonth"] = month
+                bill["billingElectricity"] = row.get("totalPower")
+                bill["actualTotalAmount"] = row.get("receieElectricity")
+                output.append(bill)
+            total = data.get("total") if isinstance(data, dict) else None
+            if not rows or total is None or len(output) >= int(total):
+                break
+            page += 1
+        return output
 
     async def async_get_daily(
         self, user: dict[str, Any], point: dict[str, Any], year_month: str
     ) -> dict[str, Any]:
-        """某月逐日电量（queryDayElectricByMPoint），year_month 为 yyyyMM。
-
-        实测每天只有 date / power(kWh) / maxTemperature / minTemperature，没有电费字段；
-        充电桩等无数据户号返回 sta=09。
-        """
-        base = {
-            "areaCode": str(point.get("areaCode") or user.get("areaCode") or ""),
+        body = {
+            "areaCode": str(user.get("areaCode") or ""),
             "eleCustId": ele_cust_id(user),
-            "eleCustNumber": str(point.get("eleCustNumber") or user.get("eleCustNumber") or ""),
+            "eleCustNumber": str(user.get("eleCustNumber") or user.get("custNumber") or ""),
+            "meteringPointId": str(point.get("meteringPointId") or ""),
+            "meteringPointNumber": str(point.get("meteringPointNumber") or ""),
             "yearMonth": year_month,
             "supplyUnit": str(user.get("supplyUnit") or ""),
         }
-        attempts = [
-            {**base, "meteringPointId": str(point[k])}
-            for k in ("meteringPointId", "meteringPointNumber")
-            if point.get(k)
-        ]
-        attempts.append(base)
-        last: NanwangApiError | None = None
-        for body in attempts:
-            try:
-                return _check(await self._post(P_DAILY, body, crypto=True), P_DAILY) or {}
-            except NanwangAuthError:
-                raise
-            except NanwangApiError as err:
-                last = err
-        assert last is not None
-        raise last
+        return _check(await self._post(P_DAILY, body), P_DAILY) or {}

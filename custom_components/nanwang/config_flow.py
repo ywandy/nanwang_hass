@@ -29,7 +29,7 @@ from homeassistant.helpers.selector import (
 )
 
 from . import async_get_session
-from .api import BASE_URL, NanwangApiError, NanwangAuthError, NanwangClient, NanwangError
+from .api import NanwangApiError, NanwangAuthError, NanwangClient, NanwangError
 from .const import (
     AREA_CODES,
     AUTH_SMS,
@@ -174,7 +174,7 @@ class NanwangConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_token(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
-        placeholders = {"message": "", "url": BASE_URL}
+        placeholders = {"message": ""}
         if user_input is not None:
             self._area = user_input[CONF_AREA_CODE]
             self._client = self._new_client(

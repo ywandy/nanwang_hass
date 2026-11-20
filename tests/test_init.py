@@ -46,6 +46,10 @@ def _state(hass: HomeAssistant, key: str):
     return hass.states.get(entity_id)
 
 
+def _entity_id(hass: HomeAssistant, key: str) -> str | None:
+    return er.async_get(hass).async_get_entity_id("sensor", DOMAIN, f"{NUMBER}_{key}")
+
+
 async def test_shared_session_survives_entry_unload(
     hass: HomeAssistant, mock_api: dict[str, AsyncMock]
 ) -> None:
@@ -81,11 +85,14 @@ async def test_sensors(hass: HomeAssistant, mock_api: dict[str, AsyncMock]) -> N
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
 
-    assert _state(hass, "balance").state == "88.8"
-    assert _state(hass, "arrears").state == "0.0"
-    assert _state(hass, "locked_balance").state == "1.2"
-    assert _state(hass, "year_energy").state == "1234.5"
-    assert _state(hass, "year_cost").attributes["unit_of_measurement"] == "CNY"
+    for removed in (
+        "balance",
+        "arrears",
+        "locked_balance",
+        "year_energy",
+        "year_cost",
+    ):
+        assert _entity_id(hass, removed) is None
 
     last = _state(hass, "last_bill_energy")
     assert last.state == "250.0"
@@ -179,15 +186,15 @@ async def test_refresh_interval(
 async def test_account_without_data(
     hass: HomeAssistant, mock_api: dict[str, AsyncMock], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """充电桩户号：年度/日数据都是 sta=09，传感器为 unknown，不刷警告。"""
+    """充电桩户号：月账单/日数据都是 sta=09，传感器为 unknown，不刷警告。"""
     no_data = NanwangApiError("09", "无此用户数据", "/charge/queryDayElectricByMPoint")
     mock_api["async_get_daily"].side_effect = no_data
-    mock_api["async_get_yearly"].side_effect = no_data
+    mock_api["async_get_monthly_bills"].side_effect = no_data
     entry = _entry(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.LOADED
     assert _state(hass, "month_energy").state == "unknown"
-    assert _state(hass, "balance").state == "88.8"
+    assert _state(hass, "last_bill_energy").state == "unknown"
     assert not [
         r for r in caplog.records
         if r.name.startswith("custom_components.nanwang") and r.levelno >= logging.WARNING
@@ -226,7 +233,7 @@ async def test_diagnostics_redacted(hass: HomeAssistant, mock_api: dict[str, Asy
     text = str(diag)
     for secret in ("tok", "13800001234", NUMBER, "CUST1"):
         assert f"'{secret}'" not in text
-    assert diag["accounts"][0]["yearly"]["totalBillingElectricity"] == "1234.5"
+    assert diag["accounts"][0]["last_bill"]["billingElectricity"] == "250"
 
 
 # HA 自带、前端自己会翻译的属性
