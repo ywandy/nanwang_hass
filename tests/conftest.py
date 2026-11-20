@@ -60,10 +60,18 @@ def mock_api() -> Generator[dict[str, AsyncMock]]:
         self.token, self.custnumber = "tok-login", "CUST1"
         return self.token
 
+    async def _login_password(self: NanwangClient, phone: str, password: str) -> str:
+        self.token, self.custnumber = "tok-login", "CUST1"
+        return self.token
+
     others = {k: v for k, v in mocks.items() if k != "async_login_sms"}
     with (
         patch.multiple(NanwangClient, **others),
         patch.object(NanwangClient, "async_login_sms", autospec=True, side_effect=_login) as login,
+        patch.object(
+            NanwangClient, "async_login_password", autospec=True, side_effect=_login_password
+        ) as login_password,
     ):
         mocks["async_login_sms"] = login
+        mocks["async_login_password"] = login_password
         yield mocks

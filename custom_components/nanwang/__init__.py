@@ -26,6 +26,7 @@ def async_get_session(hass: HomeAssistant) -> aiohttp.ClientSession:
         session = hass.data[_DATA_SESSION] = async_create_clientsession(
             hass, auto_cleanup=False, cookie_jar=aiohttp.DummyCookieJar()
         )
+
         # 全局共享会话不能跟随创建它的 config entry 卸载，否则其他账号和配置流程会失效。
         @callback
         def _async_close_session(_event: Event) -> None:

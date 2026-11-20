@@ -10,6 +10,8 @@ from collections.abc import Callable
 from typing import Any
 
 import aiohttp
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,10 +23,18 @@ P_USERS = "/mp/w2/wx/portal/eleCustNumber/queryBindEleUsers"
 P_METERING = "/mp/w2/wx/elecmanageImp/electric-fee/queryMeteringPointList"
 P_MONTHLY_BILLS = "/mp/w2/wx/elecmanageImp/electricity-bill/queryElecMultiBillList"
 P_DAILY = "/mp/w2/wx/power-eff/electric-daily/queryCalendarChartDC"
+# 掌厅（App H5）通道的密码登录；返回的 x-auth-token 与小程序通道互通（2026-11 实测）。
+P_LOGIN_PWD = "/ucs/ma/zt-hq/center/loginByPwdAndMsg"
 
 # Restored from App mini-programs 0000000000000111 and 0000000000000123.
 AES_KEY = b"cOdHFNHUNkZrjNaN"
 AES_IV = b"oMChoRLZnTivcQyR"
+# App H5 bundle（v4 assets/www 与 amr111 共用）中 Rsa.encryptedData 的 1024 位公钥。
+RSA_PUBLIC_KEY_B64 = (
+    "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQD1RJE6GBKJlFQvTU6g0ws9R+qXFccKl4i1Rf4"
+    "KVR8Rh3XtlBtvBxEyTxnVT294RVvYz6THzHGQwREnlgdkjZyGBf7tmV2CgwaHF+ttvupuzOmRVQ"
+    "/difIJtXKM+SM0aCOqBk0fFaLiHrZlZS4qI2/rBQN8VBoVKfGinVMM+USswwIDAQAB"
+)
 USER_AGENT = (
     "Mozilla/5.0 (Linux; Android 16; V2548A Build/BP2A.250605.031.A3; wv) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 "
@@ -69,6 +79,15 @@ def decrypt_param(encoded: str, key: bytes = AES_KEY, iv: bytes = AES_IV) -> str
     decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
     raw = decryptor.update(base64.b64decode(encoded)) + decryptor.finalize()
     return raw.rstrip(b"\x00").decode("utf-8", "replace")
+
+
+def rsa_encrypt(text: str, public_key_b64: str = RSA_PUBLIC_KEY_B64) -> str:
+    """App 的 JSEncrypt 兼容封装：RSA-1024 PKCS#1 v1.5，输出 Base64。
+
+    公钥参数可注入，便于测试用临时密钥对做往返验证。
+    """
+    key = serialization.load_der_public_key(base64.b64decode(public_key_b64))
+    return base64.b64encode(key.encrypt(text.encode(), asym_padding.PKCS1v15())).decode("ascii")
 
 
 class NanwangError(Exception):
@@ -260,6 +279,30 @@ class NanwangClient:
             retries=0,
         )
         _check(result, P_LOGIN)
+        if not self.token:
+            raise NanwangConnectionError("登录成功但响应头没有 x-auth-token")
+        return self.token
+
+    async def async_login_password(self, phone: str, password: str) -> str:
+        """掌厅通道密码登录（credType=10，密码字段 RSA 加密）。
+
+        小程序通道本身不提供密码登录；本接口走 App H5 通道换取 x-auth-token，
+        该 token 与小程序通道互通（2026-11 实测），可用于无人值守的自动续期。
+        """
+        self.token = None
+        result = await self._post(
+            P_LOGIN_PWD,
+            {
+                "acctId": phone,
+                "credentials": rsa_encrypt(password),
+                "credType": "10",
+                "logonChan": "04",
+            },
+            crypto=True,
+            auth=False,
+            retries=0,
+        )
+        _check(result, P_LOGIN_PWD)
         if not self.token:
             raise NanwangConnectionError("登录成功但响应头没有 x-auth-token")
         return self.token

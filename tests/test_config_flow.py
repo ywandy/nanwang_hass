@@ -19,7 +19,9 @@ from custom_components.nanwang.const import DOMAIN
 async def _start(hass: HomeAssistant, method: str) -> dict:
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     assert result["type"] is FlowResultType.MENU
-    return await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": method})
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": method}
+    )
 
 
 async def test_sms_flow(hass: HomeAssistant, mock_api: dict[str, AsyncMock]) -> None:
@@ -104,7 +106,9 @@ async def test_reauth(hass: HomeAssistant, mock_api: dict[str, AsyncMock]) -> No
     result = await entry.start_reauth_flow(hass)
     assert result["step_id"] == "reauth_confirm"
 
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "token"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "token"}
+    )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"token": "new", "area_code": "030000"}
     )
@@ -115,7 +119,9 @@ async def test_reauth(hass: HomeAssistant, mock_api: dict[str, AsyncMock]) -> No
     assert entry.data["phone"] == "13800001234"
 
 
-@pytest.mark.parametrize(("options", "current_hours"), [({}, 4), ({"update_interval_hours": 12}, 12)])
+@pytest.mark.parametrize(
+    ("options", "current_hours"), [({}, 4), ({"update_interval_hours": 12}, 12)]
+)
 async def test_refresh_options_apply_without_restart(
     hass: HomeAssistant,
     mock_api: dict[str, AsyncMock],
@@ -172,3 +178,38 @@ async def test_refresh_options_reject_invalid_interval(hass: HomeAssistant, hour
         assert result["errors"] == {"update_interval_hours": "invalid_interval"}
     assert entry.options == {}
 
+
+async def test_password_flow(hass: HomeAssistant, mock_api: dict[str, AsyncMock]) -> None:
+    result = await _start(hass, "password")
+    assert result["step_id"] == "password"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"phone": "12345", "password": "hunter2", "area_code": "030000"}
+    )
+    assert result["errors"] == {"phone": "invalid_phone"}
+    mock_api["async_login_password"].assert_not_called()
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"phone": "13800001234", "password": "hunter2", "area_code": "090000"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "南网 138****1234"
+    assert result["data"]["token"] == "tok-login"
+    assert result["data"]["phone"] == "13800001234"
+    assert result["data"]["password"] == "hunter2"
+    mock_api["async_login_password"].assert_awaited_once()
+    assert mock_api["async_login_password"].await_args.args[-2:] == ("13800001234", "hunter2")
+
+
+async def test_password_flow_wrong_password(
+    hass: HomeAssistant, mock_api: dict[str, AsyncMock]
+) -> None:
+    mock_api["async_login_password"].side_effect = NanwangAuthError(
+        "04", "账号或密码错误", "/login"
+    )
+    result = await _start(hass, "password")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"phone": "13800001234", "password": "bad", "area_code": "030000"}
+    )
+    assert result["step_id"] == "password"
+    assert result["errors"] == {"base": "invalid_auth"}

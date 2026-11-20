@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
@@ -9,10 +10,14 @@ import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from custom_components.nanwang.api import (
     P_DAILY,
     P_LOGIN,
+    P_LOGIN_PWD,
     P_METERING,
     P_MONTHLY_BILLS,
     P_SEND_SMS,
@@ -22,6 +27,7 @@ from custom_components.nanwang.api import (
     NanwangClient,
     decrypt_param,
     encrypt_param,
+    rsa_encrypt,
 )
 
 VECTORS = [
@@ -82,6 +88,16 @@ class Gateway:
                 return web.json_response({"sta": "01", "message": "手机号码格式不正确"})
             return web.json_response({"sta": "00"})
 
+        if path == P_LOGIN_PWD:
+            if body.get("acctId") != "13800000000" or body.get("credType") != "10":
+                return web.json_response({"sta": "01", "message": "参数异常"})
+            if len(body.get("credentials", "")) != 172:
+                return web.json_response({"sta": "01", "message": "凭证格式错误"})
+            return web.json_response(
+                {"sta": "00", "data": None},
+                headers={"x-auth-token": TOKEN, "Set-Cookie": "CAMSID=abc; Path=/"},
+            )
+
         if path == P_LOGIN:
             if body.get("vcCode") != "123456":
                 return web.json_response({"sta": "0001003", "message": "验证码校验失败!"})
@@ -94,9 +110,7 @@ class Gateway:
             )
 
         if request.headers.get("x-auth-token") != TOKEN:
-            return web.json_response(
-                {"sta": self.auth_sta}, headers={"x-auth-token": "guest"}
-            )
+            return web.json_response({"sta": self.auth_sta}, headers={"x-auth-token": "guest"})
 
         if path == P_USERS:
             return web.json_response(
@@ -222,3 +236,42 @@ async def test_removed_web_capabilities_are_not_exposed(gateway) -> None:
     client = _client(server, session)
     assert not hasattr(client, "async_get_account_surplus")
     assert not hasattr(client, "async_get_yearly")
+
+
+def test_rsa_encrypt_default_public_key_shape() -> None:
+    """默认公钥是 App 内置 1024 位密钥：密文固定 128 字节 → Base64 172 字符。"""
+    assert len(rsa_encrypt("secret")) == 172
+
+
+def test_rsa_encrypt_roundtrip_with_injected_key() -> None:
+    """注入临时密钥对做往返验证（等价 App 端 JSEncrypt 的 PKCS#1 v1.5）。"""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    pub_b64 = base64.b64encode(
+        private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    ).decode()
+    token = rsa_encrypt("hunter2", public_key_b64=pub_b64)
+    plaintext = private_key.decrypt(base64.b64decode(token), asym_padding.PKCS1v15())
+    assert plaintext == b"hunter2"
+
+
+async def test_app_password_login_cross_channel(gateway) -> None:
+    """密码登录走掌厅通道，换取的 token 直接用于小程序通道查询。"""
+    gateway_object, server, session = gateway
+    client = _client(server, session)
+
+    assert await client.async_login_password("13800000000", "hunter2") == TOKEN
+    assert await client.async_get_bound_users() == [USER]
+    assert client.token == ROLLED_TOKEN
+
+    login, users = gateway_object.calls
+    assert login[0] == P_LOGIN_PWD
+    assert login[1]["acctId"] == "13800000000"
+    assert login[1]["credType"] == "10"
+    assert login[1]["logonChan"] == "04"
+    assert len(login[1]["credentials"]) == 172
+    assert login[2]["need-crypto"] == "true"
+    assert users[0] == P_USERS
+    assert users[2]["x-auth-token"] == TOKEN
